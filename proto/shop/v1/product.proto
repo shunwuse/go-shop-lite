@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+package shop.v1;
+
+option go_package = "example.com/shop/proto/gen/shop/v1;shopv1";
