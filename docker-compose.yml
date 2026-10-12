@@ -1,1 +1,34 @@
-services: {}
+services:
+  product:
+    build:
+      context: .
+      dockerfile: ./services/product/Dockerfile
+    ports: ["50052:50052"]
+  order:
+    build:
+      context: .
+      dockerfile: ./services/order/Dockerfile
+    ports: ["50051:50051"]
+    environment:
+      PRODUCT_ADDR: product:50052
+    depends_on: [product]
+  user:
+    build:
+      context: .
+      dockerfile: ./services/user/Dockerfile
+    ports: ["50053:50053"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: shop
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+  nats:
+    image: nats:latest
+    ports: ["4222:4222"]
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports: ["16686:16686", "4318:4318"]
+
+volumes:
+  pgdata: {}
