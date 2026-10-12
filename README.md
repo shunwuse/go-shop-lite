@@ -101,6 +101,8 @@ go run ./scripts/chaos -kill=product -for=5s
 
 ## Benchmark (baselines checked in before any optimization)
 
+Tool versions for repro: ghz dev, buf 1.50.0, protoc-gen-go-grpc v1.6.2.
+
 ```bash
 ghz --insecure --proto proto/shop/v1/order.proto \
   --call shop.v1.OrderService.CreateOrder \
@@ -113,10 +115,10 @@ ghz --insecure --proto proto/shop/v1/product.proto \
   -c 50 -n 5000 localhost:50052
 ```
 
-| Call        | RPS | p50 | p99 | Notes              |
-| ----------- | --- | --- | --- | ------------------ |
-| CreateOrder | TBD | TBD | TBD | baseline before optimization |
-| GetProduct  | TBD | TBD | TBD | baseline before optimization |
+| Call        | RPS   | p50     | p99     | Notes              |
+| ----------- | ----- | ------- | ------- | ------------------ |
+| CreateOrder | 17.4k | withheld | withheld | 10 OK + 4990 FailedPrecondition (p1 has 10 in stock); failure-dominated mixed number. Percentiles withheld: this ghz dev build's percentile block (p50 43ms) contradicts its own RPS/Total (5000 in 287ms at c=50 implies ~2.9ms). Happy-path numbers TBD after a seed mechanism lands in Phase 2 |
+| GetProduct  | 29.5k | 0.89ms  | 3.65ms  | pure reads, 5000/5000 OK |
 
 ## Development
 
@@ -125,12 +127,15 @@ go list ./...
 go vet ./...
 go test ./...
 gofmt -l .
+golangci-lint run
 ```
 
-Proto regeneration (numbers frozen; adding a field must break no old client, test included):
+Proto regeneration (numbers frozen; adding a field must break no old client, test included).
+Run from `proto/` (not the repo root), with the plugin binaries on PATH:
 
 ```bash
-buf generate
+export PATH="$PATH:/root/go/bin:$(go env GOPATH)/bin"
+cd proto && buf generate && cd ..
 ```
 
 Out of scope for now: chat-repo integration, K8s, service mesh, client-streaming/bidi.
