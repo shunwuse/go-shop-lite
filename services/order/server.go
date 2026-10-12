@@ -13,18 +13,22 @@ import (
 )
 
 // Server is the in-memory OrderService implementation.
-// It keeps its own orders only and knows nothing about products;
-// the Saga pack will wire the product client in.
+// It keeps its own orders and deducts stock through the injected
+// product client, so tests use bufconn while production dials the network.
 type Server struct {
 	pb.UnimplementedOrderServiceServer
-	mu     sync.Mutex
-	orders map[string]*pb.GetOrderResponse
-	nextID atomic.Int64
+	mu       sync.Mutex
+	orders   map[string]*pb.GetOrderResponse
+	nextID   atomic.Int64
+	products pb.ProductServiceClient
 }
 
-// NewServer returns an empty order Server.
-func NewServer() *Server {
-	return &Server{orders: make(map[string]*pb.GetOrderResponse)}
+// NewServer returns an order Server that deducts through products.
+func NewServer(products pb.ProductServiceClient) *Server {
+	return &Server{
+		orders:   make(map[string]*pb.GetOrderResponse),
+		products: products,
+	}
 }
 
 func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
@@ -40,6 +44,10 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 		}
 	}
 
+	if s.products == nil {
+		return nil, status.Error(codes.Unavailable, "product client not wired")
+	}
+
 	id := fmt.Sprintf("o%d", s.nextID.Add(1))
 	stored := &pb.GetOrderResponse{
 		OrderId:         id,
@@ -53,10 +61,48 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 	s.orders[id] = stored
 	s.mu.Unlock()
 
+	// Saga: deduct each item under a key derived from the order so a
+	// retried CreateOrder replays instead of double-deducting. The
+	// caller ctx propagates, carrying the deadline bff -> order -> product.
+	var deducted []*pb.OrderItem
+	for _, item := range request.GetItems() {
+		_, err := s.products.DeductStock(ctx, &pb.DeductStockRequest{
+			ProductId:      item.GetProductId(),
+			Qty:            item.GetQty(),
+			IdempotencyKey: id + ":" + item.GetProductId(),
+		})
+		if err != nil {
+			s.compensate(ctx, id, deducted)
+			code := status.Code(err)
+			return nil, status.Errorf(code, "create order %s failed on %s: %s", id, item.GetProductId(), status.Convert(err).Message())
+		}
+
+		deducted = append(deducted, item)
+	}
+
 	return &pb.CreateOrderResponse{
 		OrderId:         id,
 		CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
 	}, nil
+}
+
+// compensate restores every prior deduction and flips the order to
+// CANCELLED. Restore is best-effort: the order ends CANCELLED either
+// way, and restore keys make a retried compensation replay safely.
+func (s *Server) compensate(ctx context.Context, id string, deducted []*pb.OrderItem) {
+	for _, item := range deducted {
+		_, _ = s.products.RestoreStock(ctx, &pb.RestoreStockRequest{
+			ProductId:      item.GetProductId(),
+			Qty:            item.GetQty(),
+			IdempotencyKey: id + ":" + item.GetProductId() + ":restore",
+		})
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if stored, ok := s.orders[id]; ok {
+		stored.Status = "CANCELLED"
+	}
 }
 
 func (s *Server) GetOrder(ctx context.Context, request *pb.GetOrderRequest) (*pb.GetOrderResponse, error) {

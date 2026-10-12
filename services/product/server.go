@@ -20,6 +20,9 @@ type Server struct {
 	// deductions records the first result per idempotency key so
 	// retries return the stored result instead of deducting again.
 	deductions map[string]*pb.DeductStockResponse
+	// restores records the first result per restore key so
+	// compensation retries never restore twice.
+	restores map[string]*pb.RestoreStockResponse
 }
 
 // NewServer returns a Server seeded with two products for solo testing.
@@ -30,6 +33,7 @@ func NewServer() *Server {
 			"p2": {ProductId: "p2", Name: "banana", Stock: 5},
 		},
 		deductions: make(map[string]*pb.DeductStockResponse),
+		restores:   make(map[string]*pb.RestoreStockResponse),
 	}
 }
 
@@ -85,6 +89,42 @@ func (s *Server) DeductStock(ctx context.Context, request *pb.DeductStockRequest
 	s.deductions[request.GetIdempotencyKey()] = resp
 
 	return &pb.DeductStockResponse{
+		ProductId: resp.GetProductId(),
+		Remaining: resp.GetRemaining(),
+	}, nil
+}
+
+// RestoreStock adds qty back exactly once per restore key. It is the
+// Saga compensation counterpart of DeductStock and shares its shape:
+// same validation, same replay rule, separate ledger.
+func (s *Server) RestoreStock(ctx context.Context, request *pb.RestoreStockRequest) (*pb.RestoreStockResponse, error) {
+	if request.GetProductId() == "" || request.GetIdempotencyKey() == "" || request.GetQty() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "product_id, qty (>0) and idempotency_key are required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if prev, ok := s.restores[request.GetIdempotencyKey()]; ok {
+		return &pb.RestoreStockResponse{
+			ProductId: prev.GetProductId(),
+			Remaining: prev.GetRemaining(),
+		}, nil
+	}
+
+	item, ok := s.items[request.GetProductId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "product not found")
+	}
+
+	item.Stock += request.GetQty()
+	resp := &pb.RestoreStockResponse{
+		ProductId: item.GetProductId(),
+		Remaining: item.GetStock(),
+	}
+	s.restores[request.GetIdempotencyKey()] = resp
+
+	return &pb.RestoreStockResponse{
 		ProductId: resp.GetProductId(),
 		Remaining: resp.GetRemaining(),
 	}, nil

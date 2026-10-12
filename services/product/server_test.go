@@ -150,3 +150,44 @@ func TestDeductStock_Invalid(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreStock_RoundTrip(t *testing.T) {
+	c := dial(t)
+	ctx := context.Background()
+
+	if _, err := c.DeductStock(ctx, &pb.DeductStockRequest{ProductId: "p1", Qty: 4, IdempotencyKey: "k-rt"}); err != nil {
+		t.Fatalf("DeductStock: %v", err)
+	}
+	resp, err := c.RestoreStock(ctx, &pb.RestoreStockRequest{ProductId: "p1", Qty: 4, IdempotencyKey: "k-rt-back"})
+	if err != nil {
+		t.Fatalf("RestoreStock: %v", err)
+	}
+	if resp.GetRemaining() != 10 {
+		t.Fatalf("RestoreStock remaining = %d, want 10", resp.GetRemaining())
+	}
+}
+
+func TestRestoreStock_Idempotent(t *testing.T) {
+	c := dial(t)
+	ctx := context.Background()
+
+	first, err := c.RestoreStock(ctx, &pb.RestoreStockRequest{ProductId: "p1", Qty: 2, IdempotencyKey: "k-rdup"})
+	if err != nil {
+		t.Fatalf("RestoreStock: %v", err)
+	}
+	again, err := c.RestoreStock(ctx, &pb.RestoreStockRequest{ProductId: "p1", Qty: 2, IdempotencyKey: "k-rdup"})
+	if err != nil {
+		t.Fatalf("RestoreStock retry: %v", err)
+	}
+	if again.GetRemaining() != first.GetRemaining() {
+		t.Fatalf("retry remaining = %d, want %d", again.GetRemaining(), first.GetRemaining())
+	}
+}
+
+func TestRestoreStock_NotFound(t *testing.T) {
+	c := dial(t)
+
+	if _, err := c.RestoreStock(context.Background(), &pb.RestoreStockRequest{ProductId: "nope", Qty: 1, IdempotencyKey: "k-missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RestoreStock unknown code = %v, want NotFound", status.Code(err))
+	}
+}
