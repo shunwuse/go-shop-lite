@@ -7,6 +7,7 @@ option go_package = "example.com/shop/proto/gen/shop/v1;shopv1";
 service ProductService {
   rpc GetProduct(GetProductRequest) returns (GetProductResponse);
   rpc DeductStock(DeductStockRequest) returns (DeductStockResponse);
+  rpc RestoreStock(RestoreStockRequest) returns (RestoreStockResponse);
 }
 
 message GetProductRequest { string product_id = 1; }
@@ -25,5 +26,16 @@ message DeductStockRequest {
 
 message DeductStockResponse {
   string product_id = 1;
-  int32  remaining  = 2;
+  int32 remaining = 2;
+}
+
+message RestoreStockRequest {
+  string product_id = 1;
+  int32 qty = 2;
+  string idempotency_key = 3;
+}
+
+message RestoreStockResponse {
+  string product_id = 1;
+  int32 remaining = 2;
 }

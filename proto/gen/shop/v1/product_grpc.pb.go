@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProductService_GetProduct_FullMethodName  = "/shop.v1.ProductService/GetProduct"
-	ProductService_DeductStock_FullMethodName = "/shop.v1.ProductService/DeductStock"
+	ProductService_GetProduct_FullMethodName   = "/shop.v1.ProductService/GetProduct"
+	ProductService_DeductStock_FullMethodName  = "/shop.v1.ProductService/DeductStock"
+	ProductService_RestoreStock_FullMethodName = "/shop.v1.ProductService/RestoreStock"
 )
 
 // ProductServiceClient is the client API for ProductService service.
@@ -29,6 +30,7 @@ const (
 type ProductServiceClient interface {
 	GetProduct(ctx context.Context, in *GetProductRequest, opts ...grpc.CallOption) (*GetProductResponse, error)
 	DeductStock(ctx context.Context, in *DeductStockRequest, opts ...grpc.CallOption) (*DeductStockResponse, error)
+	RestoreStock(ctx context.Context, in *RestoreStockRequest, opts ...grpc.CallOption) (*RestoreStockResponse, error)
 }
 
 type productServiceClient struct {
@@ -59,12 +61,23 @@ func (c *productServiceClient) DeductStock(ctx context.Context, in *DeductStockR
 	return out, nil
 }
 
+func (c *productServiceClient) RestoreStock(ctx context.Context, in *RestoreStockRequest, opts ...grpc.CallOption) (*RestoreStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreStockResponse)
+	err := c.cc.Invoke(ctx, ProductService_RestoreStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProductServiceServer is the server API for ProductService service.
 // All implementations must embed UnimplementedProductServiceServer
 // for forward compatibility.
 type ProductServiceServer interface {
 	GetProduct(context.Context, *GetProductRequest) (*GetProductResponse, error)
 	DeductStock(context.Context, *DeductStockRequest) (*DeductStockResponse, error)
+	RestoreStock(context.Context, *RestoreStockRequest) (*RestoreStockResponse, error)
 	mustEmbedUnimplementedProductServiceServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedProductServiceServer) GetProduct(context.Context, *GetProduct
 }
 func (UnimplementedProductServiceServer) DeductStock(context.Context, *DeductStockRequest) (*DeductStockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeductStock not implemented")
+}
+func (UnimplementedProductServiceServer) RestoreStock(context.Context, *RestoreStockRequest) (*RestoreStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreStock not implemented")
 }
 func (UnimplementedProductServiceServer) mustEmbedUnimplementedProductServiceServer() {}
 func (UnimplementedProductServiceServer) testEmbeddedByValue()                        {}
@@ -138,6 +154,24 @@ func _ProductService_DeductStock_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProductService_RestoreStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProductServiceServer).RestoreStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProductService_RestoreStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProductServiceServer).RestoreStock(ctx, req.(*RestoreStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProductService_ServiceDesc is the grpc.ServiceDesc for ProductService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var ProductService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeductStock",
 			Handler:    _ProductService_DeductStock_Handler,
+		},
+		{
+			MethodName: "RestoreStock",
+			Handler:    _ProductService_RestoreStock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
