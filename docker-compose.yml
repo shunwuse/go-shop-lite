@@ -26,10 +26,20 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
   nats:
     image: nats:latest
+    command: ["-js"]
     ports: ["4222:4222"]
+    volumes: [natsdata:/data]
+  notify:
+    build:
+      context: .
+      dockerfile: ./services/notify/Dockerfile
+    environment:
+      NATS_ADDR: nats:4222
+    depends_on: [nats, order]
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports: ["16686:16686", "4318:4318"]
 
 volumes:
   pgdata: {}
+  natsdata: {}

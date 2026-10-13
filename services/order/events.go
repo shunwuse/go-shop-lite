@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // OrderCreatedSubject carries one message per successful order.
 const OrderCreatedSubject = "order.created"
+
+// OrderStream persists OrderCreatedSubject so a restarted consumer
+// re-receives without loss.
+const OrderStream = "ORDERS"
 
 // OrderCreated is the payload of OrderCreatedSubject.
 type OrderCreated struct {
@@ -23,11 +28,23 @@ type Publisher interface {
 	PublishOrderCreated(ctx context.Context, event OrderCreated) error
 }
 
-// NATSPublisher publishes to a live NATS server. Delivery past the
-// Publish call is the server's job; durability (streams, durable
-// consumers) is set up on the consumer side in a later pack.
+// EnsureOrderStream creates the durable stream once; later calls update
+// nothing. Both publisher and consumer call it, so either side can boot
+// first without depending on the other.
+func EnsureOrderStream(ctx context.Context, js jetstream.JetStream) error {
+	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     OrderStream,
+		Subjects: []string{OrderCreatedSubject},
+	})
+
+	return err
+}
+
+// NATSPublisher publishes through JetStream, so every announcement is
+// persisted before Publish returns. A consumer that was down at publish
+// time still receives it after restart.
 type NATSPublisher struct {
-	conn *nats.Conn
+	js jetstream.JetStream
 }
 
 // NewNATSPublisher dials addr and returns a Publisher.
@@ -36,7 +53,16 @@ func NewNATSPublisher(addr string) (*NATSPublisher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &NATSPublisher{conn: conn}, nil
+
+	js, err := jetstream.New(conn)
+	if err != nil {
+		return nil, err
+	}
+	if err := EnsureOrderStream(context.Background(), js); err != nil {
+		return nil, err
+	}
+
+	return &NATSPublisher{js: js}, nil
 }
 
 func (p *NATSPublisher) PublishOrderCreated(ctx context.Context, event OrderCreated) error {
@@ -44,5 +70,7 @@ func (p *NATSPublisher) PublishOrderCreated(ctx context.Context, event OrderCrea
 	if err != nil {
 		return err
 	}
-	return p.conn.Publish(OrderCreatedSubject, raw)
+
+	_, err = p.js.Publish(ctx, OrderCreatedSubject, raw)
+	return err
 }
