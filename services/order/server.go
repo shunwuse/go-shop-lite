@@ -15,6 +15,57 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Retry policy for product calls: transient failures get a few more
+// chances under the same idempotency key, so a retry replays instead of
+// double-deducting. Permanent failures return immediately.
+const (
+	deductAttempts = 3
+	deductBackoff  = 50 * time.Millisecond
+	deductTimeout  = 2 * time.Second
+)
+
+// retryable reports whether another attempt could succeed. NotFound,
+// InvalidArgument, and FailedPrecondition describe the request or the
+// stock, not the network, so retrying is pointless.
+func retryable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// deductOne deducts a single item with bounded retries. The key never
+// changes across attempts, so the product ledger stays exact-once no
+// matter how many times the network forces a replay.
+func (s *Server) deductOne(ctx context.Context, id string, item *pb.OrderItem) error {
+	request := &pb.DeductStockRequest{
+		ProductId:      item.GetProductId(),
+		Qty:            item.GetQty(),
+		IdempotencyKey: id + ":" + item.GetProductId(),
+	}
+
+	var err error
+	for attempt := range deductAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(deductBackoff):
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, deductTimeout)
+		_, err = s.products.DeductStock(attemptCtx, request)
+		cancel()
+		if err == nil || !retryable(err) {
+			return err
+		}
+	}
+
+	return err
+}
+
 // Server implements OrderService over a Store, deducting stock through the
 // injected product client, so tests use bufconn while production dials the
 // network.
@@ -84,11 +135,7 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 	// caller ctx propagates, carrying the deadline bff -> order -> product.
 	var deducted []*pb.OrderItem
 	for _, item := range request.GetItems() {
-		_, err := s.products.DeductStock(ctx, &pb.DeductStockRequest{
-			ProductId:      item.GetProductId(),
-			Qty:            item.GetQty(),
-			IdempotencyKey: id + ":" + item.GetProductId(),
-		})
+		err := s.deductOne(ctx, id, item)
 		if err != nil {
 			s.compensate(ctx, id, deducted)
 			code := status.Code(err)

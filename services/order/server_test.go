@@ -27,6 +27,10 @@ type fakeProducts struct {
 	mu    sync.Mutex
 	stock map[string]int32
 	fail  map[string]codes.Code
+	// flaky fails the next calls with Unavailable, then recovers.
+	// calls counts every DeductStock arrival for retry assertions.
+	flaky int
+	calls int
 	// seenTrace records the incoming trace ID per DeductStock call,
 	// proving the trace propagated order -> product.
 	seenTrace []string
@@ -36,7 +40,12 @@ func (f *fakeProducts) DeductStock(ctx context.Context, request *pb.DeductStockR
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls++
 	f.seenTrace = append(f.seenTrace, trace.SpanFromContext(ctx).SpanContext().TraceID().String())
+	if f.flaky > 0 {
+		f.flaky--
+		return nil, status.Error(codes.Unavailable, "flaky backend")
+	}
 	if code, ok := f.fail[request.GetProductId()]; ok {
 		return nil, status.Error(code, "forced failure")
 	}
@@ -273,6 +282,47 @@ func TestCreateOrder_PublishFails(t *testing.T) {
 	}
 }
 
+func TestCreateOrder_RetriesTransient(t *testing.T) {
+	c, fake, _ := dial(t, map[string]int32{"p1": 10}, nil)
+	fake.flaky = 2
+	ctx := context.Background()
+
+	created, err := c.CreateOrder(ctx, &pb.CreateOrderRequest{
+		CustomerId: "c1",
+		Items:      []*pb.OrderItem{{ProductId: "p1", Qty: 2}},
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder over flaky backend: %v", err)
+	}
+	if fake.calls != 3 {
+		t.Fatalf("backend calls = %d, want 3 (2 failures + 1 success)", fake.calls)
+	}
+	got, err := c.GetOrder(ctx, &pb.GetOrderRequest{OrderId: created.GetOrderId()})
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if got.GetStatus() != "CREATED" {
+		t.Fatalf("order status = %q, want CREATED", got.GetStatus())
+	}
+	if fake.stock["p1"] != 8 {
+		t.Fatalf("stock = %d, want 8 (deducted once)", fake.stock["p1"])
+	}
+}
+
+func TestCreateOrder_NoRetryOnPermanent(t *testing.T) {
+	c, fake, _ := dial(t, map[string]int32{"p1": 1}, nil)
+	ctx := context.Background()
+
+	if _, err := c.CreateOrder(ctx, &pb.CreateOrderRequest{
+		CustomerId: "c1",
+		Items:      []*pb.OrderItem{{ProductId: "p1", Qty: 5}},
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateOrder code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if fake.calls != 1 {
+		t.Fatalf("backend calls = %d, want 1 (no retry on permanent failure)", fake.calls)
+	}
+}
 func TestCreateOrder_PropagatesTrace(t *testing.T) {
 	// Real SDK so spans carry valid IDs; without it every context is
 	// a noop and propagation is unobservable.
