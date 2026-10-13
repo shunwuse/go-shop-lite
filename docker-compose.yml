@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: ./services/product/Dockerfile
     ports: ["50052:50052"]
+    environment:
+      OTEL_ADDR: jaeger:4317
   order:
     build:
       context: .
@@ -12,6 +14,7 @@ services:
     environment:
       PRODUCT_ADDR: product:50052
       NATS_ADDR: nats:4222
+      OTEL_ADDR: jaeger:4317
     depends_on: [product]
   user:
     build:
@@ -38,7 +41,7 @@ services:
     depends_on: [nats, order]
   jaeger:
     image: jaegertracing/all-in-one:latest
-    ports: ["16686:16686", "4318:4318"]
+    ports: ["16686:16686", "4317:4317", "4318:4318"]
 
 volumes:
   pgdata: {}

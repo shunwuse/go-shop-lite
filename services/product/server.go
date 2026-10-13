@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	pb "example.com/shop/proto/gen/shop/v1"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -65,6 +67,13 @@ func (s *Server) DeductStock(ctx context.Context, request *pb.DeductStockRequest
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// The server handler already opened a span from the propagated
+	// context; tag it so the order -> product link is visible in Jaeger.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("product.id", request.GetProductId()),
+		attribute.Int("deduct.qty", int(request.GetQty())),
+	)
 
 	if prev, ok := s.deductions[request.GetIdempotencyKey()]; ok {
 		return &pb.DeductStockResponse{

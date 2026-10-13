@@ -7,6 +7,11 @@ import (
 	"testing"
 
 	pb "example.com/shop/proto/gen/shop/v1"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -22,12 +27,16 @@ type fakeProducts struct {
 	mu    sync.Mutex
 	stock map[string]int32
 	fail  map[string]codes.Code
+	// seenTrace records the incoming trace ID per DeductStock call,
+	// proving the trace propagated order -> product.
+	seenTrace []string
 }
 
 func (f *fakeProducts) DeductStock(ctx context.Context, request *pb.DeductStockRequest) (*pb.DeductStockResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.seenTrace = append(f.seenTrace, trace.SpanFromContext(ctx).SpanContext().TraceID().String())
 	if code, ok := f.fail[request.GetProductId()]; ok {
 		return nil, status.Error(code, "forced failure")
 	}
@@ -75,7 +84,7 @@ func dial(t *testing.T, stock map[string]int32, fail map[string]codes.Code) (pb.
 	events := &fakeEvents{}
 
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	pb.RegisterProductServiceServer(srv, fake)
 
 	products, err := grpc.NewClient("passthrough:///bufnet",
@@ -83,6 +92,7 @@ func dial(t *testing.T, stock map[string]int32, fail map[string]codes.Code) (pb.
 			return lis.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
 		t.Fatalf("dial product: %v", err)
@@ -98,6 +108,7 @@ func dial(t *testing.T, stock map[string]int32, fail map[string]codes.Code) (pb.
 			return lis.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
 		t.Fatalf("dial order: %v", err)
@@ -259,5 +270,34 @@ func TestCreateOrder_PublishFails(t *testing.T) {
 	}
 	if created.GetOrderId() == "" {
 		t.Fatalf("CreateOrder returned empty order_id")
+	}
+}
+
+func TestCreateOrder_PropagatesTrace(t *testing.T) {
+	// Real SDK so spans carry valid IDs; without it every context is
+	// a noop and propagation is unobservable.
+	provider := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	c, fake, _ := dial(t, map[string]int32{"p1": 10}, nil)
+
+	tracer := otel.Tracer("test")
+	ctx, span := tracer.Start(context.Background(), "test-create")
+	defer span.End()
+	want := span.SpanContext().TraceID().String()
+
+	if _, err := c.CreateOrder(ctx, &pb.CreateOrderRequest{
+		CustomerId: "c1",
+		Items:      []*pb.OrderItem{{ProductId: "p1", Qty: 1}},
+	}); err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if len(fake.seenTrace) != 1 {
+		t.Fatalf("fake saw %d calls, want 1", len(fake.seenTrace))
+	}
+	if fake.seenTrace[0] != want {
+		t.Fatalf("product saw trace %q, want %q", fake.seenTrace[0], want)
 	}
 }

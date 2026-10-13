@@ -9,6 +9,9 @@ import (
 	"time"
 
 	pb "example.com/shop/proto/gen/shop/v1"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -55,6 +58,14 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 	}
 
 	id := fmt.Sprintf("o%d", s.nextID.Add(1))
+
+	// One span per order attempt, wrapping the whole Saga. The product
+	// calls below inherit ctx, so the trace continues order -> product
+	// without any manual header handling.
+	ctx, span := otel.Tracer("example.com/shop/services/order").Start(ctx, "CreateOrder")
+	defer span.End()
+	span.SetAttributes(attribute.String("order.id", id))
+
 	stored := &pb.GetOrderResponse{
 		OrderId:         id,
 		CustomerId:      request.GetCustomerId(),
@@ -80,6 +91,8 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 		if err != nil {
 			s.compensate(ctx, id, deducted)
 			code := status.Code(err)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, "deduct failed")
 			return nil, status.Errorf(code, "create order %s failed on %s: %s", id, item.GetProductId(), status.Convert(err).Message())
 		}
 
@@ -94,7 +107,7 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 			OrderID:         id,
 			CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
 		}); err != nil {
-			log.Printf("publish %s %s: %v", OrderCreatedSubject, id, err)
+			log.Printf("trace_id=%s publish %s %s: %v", span.SpanContext().TraceID(), OrderCreatedSubject, id, err)
 		}
 	}
 
