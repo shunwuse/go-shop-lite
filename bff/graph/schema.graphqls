@@ -1,0 +1,27 @@
+# One round trip returns the whole tree: order + items + product.
+# What REST needs 3 trips for (GET order, GET items, GET each product).
+directive @goField(forceResolver: Boolean, name: String, omittable: Boolean) on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+type Query {
+  order(id: String!): Order!
+}
+
+type Order {
+  id: String!
+  customerId: String!
+  status: String!
+  items: [OrderItem!]!
+}
+
+type OrderItem {
+  productId: String!
+  qty: Int!
+  # Null when the product is gone: the order outlives its catalog entry,
+  # so a missing product nulls the leaf instead of failing the query.
+  product: Product @goField(forceResolver: true)
+}
+
+type Product {
+  id: String!
+  name: String!
+}

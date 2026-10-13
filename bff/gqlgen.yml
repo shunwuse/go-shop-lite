@@ -1,0 +1,17 @@
+# Where the GraphQL schema lives, and where gqlgen puts its output.
+# Hand-written: schema.graphqls, resolver.go, main.go (last).
+# Generated (committed, like proto/gen): generated.go, model/models_gen.go.
+# Generated once, then filled by hand: schema.resolvers.go.
+schema:
+  - graph/*.graphqls
+exec:
+  package: graph
+  filename: graph/generated.go
+model:
+  package: model
+  filename: graph/model/models_gen.go
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
