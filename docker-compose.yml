@@ -23,6 +23,17 @@ services:
       context: .
       dockerfile: ./services/user/Dockerfile
     ports: ["50053:50053"]
+  bff:
+    build:
+      context: .
+      dockerfile: ./bff/Dockerfile
+    ports: ["8080:8080"]
+    environment:
+      ORDER_ADDR: order:50051
+      PRODUCT_ADDR: product:50052
+      USER_ADDR: user:50053
+      OTEL_ADDR: jaeger:4317
+    depends_on: [order, product, user]
   postgres:
     image: postgres:16-alpine
     environment:
