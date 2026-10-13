@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,13 +22,18 @@ type Server struct {
 	orders   map[string]*pb.GetOrderResponse
 	nextID   atomic.Int64
 	products pb.ProductServiceClient
+	// events is nil-tolerant: nil means eventing disabled (local runs
+	// without NATS). A publish failure never fails the order.
+	events Publisher
 }
 
-// NewServer returns an order Server that deducts through products.
-func NewServer(products pb.ProductServiceClient) *Server {
+// NewServer returns an order Server that deducts through products and
+// announces success through events (nil disables announcing).
+func NewServer(products pb.ProductServiceClient, events Publisher) *Server {
 	return &Server{
 		orders:   make(map[string]*pb.GetOrderResponse),
 		products: products,
+		events:   events,
 	}
 }
 
@@ -78,6 +84,18 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 		}
 
 		deducted = append(deducted, item)
+	}
+
+	// Announce only after every deduction lands. Publish failure is
+	// logged, never fatal: the order is already true, the event is
+	// a notification, and conflating the two would flip successes.
+	if s.events != nil {
+		if err := s.events.PublishOrderCreated(ctx, OrderCreated{
+			OrderID:         id,
+			CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
+		}); err != nil {
+			log.Printf("publish %s %s: %v", OrderCreatedSubject, id, err)
+		}
 	}
 
 	return &pb.CreateOrderResponse{

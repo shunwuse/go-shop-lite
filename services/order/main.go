@@ -26,9 +26,18 @@ func main() {
 		log.Fatalf("dial product: %v", err)
 	}
 
+	var events Publisher
+	if natsAddr := os.Getenv("NATS_ADDR"); natsAddr != "" {
+		publisher, err := NewNATSPublisher(natsAddr)
+		if err != nil {
+			log.Fatalf("dial nats: %v", err)
+		}
+		events = publisher
+	}
+
 	srv := grpc.NewServer()
 
-	pb.RegisterOrderServiceServer(srv, NewServer(pb.NewProductServiceClient(conn)))
+	pb.RegisterOrderServiceServer(srv, NewServer(pb.NewProductServiceClient(conn), events))
 
 	log.Fatal(srv.Serve(lis))
 }

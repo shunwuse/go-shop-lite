@@ -11,6 +11,7 @@ services:
     ports: ["50051:50051"]
     environment:
       PRODUCT_ADDR: product:50052
+      NATS_ADDR: nats:4222
     depends_on: [product]
   user:
     build:
