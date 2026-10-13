@@ -117,7 +117,7 @@ ghz --insecure --proto proto/shop/v1/product.proto \
 
 | Call        | RPS   | p50     | p99     | Notes              |
 | ----------- | ----- | ------- | ------- | ------------------ |
-| CreateOrder | 17.4k | withheld | withheld | 10 OK + 4990 FailedPrecondition (p1 has 10 in stock); failure-dominated mixed number. Percentiles withheld: this ghz dev build's percentile block (p50 43ms) contradicts its own RPS/Total (5000 in 287ms at c=50 implies ~2.9ms). Happy-path numbers TBD after a seed mechanism lands in Phase 2 |
+| CreateOrder (happy) | 502 | 68ms | 487ms | Postgres-backed, seeded 10000, 5000/5000 OK. In-memory failure-dominated run did 17.4k RPS (10 OK + 4990 FailedPrecondition); its percentiles were withheld over a ghz reporting anomaly |
 | GetProduct  | 29.5k | 0.89ms  | 3.65ms  | pure reads, 5000/5000 OK |
 
 ## Development
