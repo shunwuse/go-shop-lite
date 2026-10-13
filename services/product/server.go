@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"sync"
+	"errors"
 
 	pb "example.com/shop/proto/gen/shop/v1"
 	"go.opentelemetry.io/otel/attribute"
@@ -11,31 +11,26 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Server is the in-memory ProductService implementation.
-// Storage is a map until the split-DB phase wires product_db;
-// the shape (lookup by product_id, no order fields) already
-// enforces the boundary.
+// Server implements ProductService over a Store. Validation and error
+// mapping live here; persistence lives behind the interface.
 type Server struct {
 	pb.UnimplementedProductServiceServer
-	mu    sync.Mutex
-	items map[string]*pb.GetProductResponse
-	// deductions records the first result per idempotency key so
-	// retries return the stored result instead of deducting again.
-	deductions map[string]*pb.DeductStockResponse
-	// restores records the first result per restore key so
-	// compensation retries never restore twice.
-	restores map[string]*pb.RestoreStockResponse
+	store Store
 }
 
-// NewServer returns a Server seeded with two products for solo testing.
-func NewServer() *Server {
-	return &Server{
-		items: map[string]*pb.GetProductResponse{
-			"p1": {ProductId: "p1", Name: "apple", Stock: 10},
-			"p2": {ProductId: "p2", Name: "banana", Stock: 5},
-		},
-		deductions: make(map[string]*pb.DeductStockResponse),
-		restores:   make(map[string]*pb.RestoreStockResponse),
+// NewServer returns a Server over the given Store.
+func NewServer(store Store) *Server {
+	return &Server{store: store}
+}
+
+func toStatus(err error) error {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return status.Error(codes.NotFound, "product not found")
+	case errors.Is(err, ErrInsufficient):
+		return status.Error(codes.FailedPrecondition, "insufficient stock")
+	default:
+		return status.Error(codes.Unavailable, err.Error())
 	}
 }
 
@@ -43,19 +38,12 @@ func (s *Server) GetProduct(ctx context.Context, request *pb.GetProductRequest) 
 	if request.GetProductId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "product_id is required")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	item, ok := s.items[request.GetProductId()]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "product not found")
+	item, err := s.store.GetProduct(ctx, request.GetProductId())
+	if err != nil {
+		return nil, toStatus(err)
 	}
-	return &pb.GetProductResponse{
-		ProductId: item.GetProductId(),
-		Name:      item.GetName(),
-		Stock:     item.GetStock(),
-	}, nil
+
+	return item, nil
 }
 
 // DeductStock subtracts qty from the product stock exactly once per
@@ -65,9 +53,6 @@ func (s *Server) DeductStock(ctx context.Context, request *pb.DeductStockRequest
 		return nil, status.Error(codes.InvalidArgument, "product_id, qty (>0) and idempotency_key are required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// The server handler already opened a span from the propagated
 	// context; tag it so the order -> product link is visible in Jaeger.
 	trace.SpanFromContext(ctx).SetAttributes(
@@ -75,31 +60,14 @@ func (s *Server) DeductStock(ctx context.Context, request *pb.DeductStockRequest
 		attribute.Int("deduct.qty", int(request.GetQty())),
 	)
 
-	if prev, ok := s.deductions[request.GetIdempotencyKey()]; ok {
-		return &pb.DeductStockResponse{
-			ProductId: prev.GetProductId(),
-			Remaining: prev.GetRemaining(),
-		}, nil
+	remaining, err := s.store.Deduct(ctx, request.GetProductId(), request.GetQty(), request.GetIdempotencyKey())
+	if err != nil {
+		return nil, toStatus(err)
 	}
-
-	item, ok := s.items[request.GetProductId()]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "product not found")
-	}
-	if item.GetStock() < request.GetQty() {
-		return nil, status.Error(codes.FailedPrecondition, "insufficient stock")
-	}
-
-	item.Stock -= request.GetQty()
-	resp := &pb.DeductStockResponse{
-		ProductId: item.GetProductId(),
-		Remaining: item.GetStock(),
-	}
-	s.deductions[request.GetIdempotencyKey()] = resp
 
 	return &pb.DeductStockResponse{
-		ProductId: resp.GetProductId(),
-		Remaining: resp.GetRemaining(),
+		ProductId: request.GetProductId(),
+		Remaining: remaining,
 	}, nil
 }
 
@@ -111,30 +79,13 @@ func (s *Server) RestoreStock(ctx context.Context, request *pb.RestoreStockReque
 		return nil, status.Error(codes.InvalidArgument, "product_id, qty (>0) and idempotency_key are required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if prev, ok := s.restores[request.GetIdempotencyKey()]; ok {
-		return &pb.RestoreStockResponse{
-			ProductId: prev.GetProductId(),
-			Remaining: prev.GetRemaining(),
-		}, nil
+	remaining, err := s.store.Restore(ctx, request.GetProductId(), request.GetQty(), request.GetIdempotencyKey())
+	if err != nil {
+		return nil, toStatus(err)
 	}
-
-	item, ok := s.items[request.GetProductId()]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "product not found")
-	}
-
-	item.Stock += request.GetQty()
-	resp := &pb.RestoreStockResponse{
-		ProductId: item.GetProductId(),
-		Remaining: item.GetStock(),
-	}
-	s.restores[request.GetIdempotencyKey()] = resp
 
 	return &pb.RestoreStockResponse{
-		ProductId: resp.GetProductId(),
-		Remaining: resp.GetRemaining(),
+		ProductId: request.GetProductId(),
+		Remaining: remaining,
 	}, nil
 }

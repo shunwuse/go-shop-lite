@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	pb "example.com/shop/proto/gen/shop/v1"
@@ -16,25 +15,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Server is the in-memory OrderService implementation.
-// It keeps its own orders and deducts stock through the injected
-// product client, so tests use bufconn while production dials the network.
+// Server implements OrderService over a Store, deducting stock through the
+// injected product client, so tests use bufconn while production dials the
+// network.
 type Server struct {
 	pb.UnimplementedOrderServiceServer
-	mu       sync.Mutex
-	orders   map[string]*pb.GetOrderResponse
-	nextID   atomic.Int64
+	store    Store
 	products pb.ProductServiceClient
 	// events is nil-tolerant: nil means eventing disabled (local runs
 	// without NATS). A publish failure never fails the order.
 	events Publisher
 }
 
-// NewServer returns an order Server that deducts through products and
-// announces success through events (nil disables announcing).
-func NewServer(products pb.ProductServiceClient, events Publisher) *Server {
+// NewServer returns an order Server over the given Store.
+func NewServer(store Store, products pb.ProductServiceClient, events Publisher) *Server {
 	return &Server{
-		orders:   make(map[string]*pb.GetOrderResponse),
+		store:    store,
 		products: products,
 		events:   events,
 	}
@@ -57,7 +53,24 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 		return nil, status.Error(codes.Unavailable, "product client not wired")
 	}
 
-	id := fmt.Sprintf("o%d", s.nextID.Add(1))
+	n, err := s.store.NextID(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+
+	id := fmt.Sprintf("o%d", n)
+
+	stored := Order{
+		OrderID:         id,
+		CustomerID:      request.GetCustomerId(),
+		Items:           request.GetItems(),
+		Status:          "CREATED",
+		CreatedAtUnixMs: time.Now().UnixMilli(),
+	}
+
+	if err := s.store.Create(ctx, stored); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 
 	// One span per order attempt, wrapping the whole Saga. The product
 	// calls below inherit ctx, so the trace continues order -> product
@@ -65,18 +78,6 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 	ctx, span := otel.Tracer("example.com/shop/services/order").Start(ctx, "CreateOrder")
 	defer span.End()
 	span.SetAttributes(attribute.String("order.id", id))
-
-	stored := &pb.GetOrderResponse{
-		OrderId:         id,
-		CustomerId:      request.GetCustomerId(),
-		Items:           request.GetItems(),
-		Status:          "CREATED",
-		CreatedAtUnixMs: time.Now().UnixMilli(),
-	}
-
-	s.mu.Lock()
-	s.orders[id] = stored
-	s.mu.Unlock()
 
 	// Saga: deduct each item under a key derived from the order so a
 	// retried CreateOrder replays instead of double-deducting. The
@@ -105,7 +106,7 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 	if s.events != nil {
 		if err := s.events.PublishOrderCreated(ctx, OrderCreated{
 			OrderID:         id,
-			CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
+			CreatedAtUnixMs: stored.CreatedAtUnixMs,
 		}); err != nil {
 			log.Printf("trace_id=%s publish %s %s: %v", span.SpanContext().TraceID(), OrderCreatedSubject, id, err)
 		}
@@ -113,7 +114,7 @@ func (s *Server) CreateOrder(ctx context.Context, request *pb.CreateOrderRequest
 
 	return &pb.CreateOrderResponse{
 		OrderId:         id,
-		CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
+		CreatedAtUnixMs: stored.CreatedAtUnixMs,
 	}, nil
 }
 
@@ -129,31 +130,26 @@ func (s *Server) compensate(ctx context.Context, id string, deducted []*pb.Order
 		})
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if stored, ok := s.orders[id]; ok {
-		stored.Status = "CANCELLED"
-	}
+	_ = s.store.SetStatus(ctx, id, "CANCELLED")
 }
 
 func (s *Server) GetOrder(ctx context.Context, request *pb.GetOrderRequest) (*pb.GetOrderResponse, error) {
 	if request.GetOrderId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "order_id is required")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	stored, ok := s.orders[request.GetOrderId()]
-	if !ok {
+	stored, err := s.store.Get(ctx, request.GetOrderId())
+	if errors.Is(err, ErrOrderNotFound) {
 		return nil, status.Error(codes.NotFound, "order not found")
+	}
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
 	return &pb.GetOrderResponse{
-		OrderId:         stored.GetOrderId(),
-		CustomerId:      stored.GetCustomerId(),
-		Items:           stored.GetItems(),
-		Status:          stored.GetStatus(),
-		CreatedAtUnixMs: stored.GetCreatedAtUnixMs(),
+		OrderId:         stored.OrderID,
+		CustomerId:      stored.CustomerID,
+		Items:           stored.Items,
+		Status:          stored.Status,
+		CreatedAtUnixMs: stored.CreatedAtUnixMs,
 	}, nil
 }

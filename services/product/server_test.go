@@ -19,7 +19,7 @@ func dial(t *testing.T) pb.ProductServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
-	pb.RegisterProductServiceServer(srv, NewServer())
+	pb.RegisterProductServiceServer(srv, NewServer(NewMemoryStore()))
 	go srv.Serve(lis)
 	t.Cleanup(func() { srv.Stop() })
 

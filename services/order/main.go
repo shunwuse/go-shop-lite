@@ -51,7 +51,18 @@ func main() {
 
 	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
-	pb.RegisterOrderServiceServer(srv, NewServer(pb.NewProductServiceClient(conn), events))
+	// Empty DATABASE_URL keeps the memory store: local runs need no
+	// database. Compose sets the order role DSN.
+	store := Store(NewMemoryStore())
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		pg, err := OpenPGStore(ctx, dsn)
+		if err != nil {
+			log.Fatalf("open order_db: %v", err)
+		}
+		store = pg
+	}
+
+	pb.RegisterOrderServiceServer(srv, NewServer(store, pb.NewProductServiceClient(conn), events))
 
 	log.Fatal(srv.Serve(lis))
 }

@@ -98,7 +98,7 @@ func dial(t *testing.T, stock map[string]int32, fail map[string]codes.Code) (pb.
 		t.Fatalf("dial product: %v", err)
 	}
 	t.Cleanup(func() { products.Close() })
-	pb.RegisterOrderServiceServer(srv, NewServer(pb.NewProductServiceClient(products), events))
+	pb.RegisterOrderServiceServer(srv, NewServer(NewMemoryStore(), pb.NewProductServiceClient(products), events))
 
 	go srv.Serve(lis)
 	t.Cleanup(func() { srv.Stop() })

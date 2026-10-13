@@ -26,9 +26,20 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
+	// Empty DATABASE_URL keeps the memory store: local runs need no
+	// database. Compose sets the product role DSN.
+	store := Store(NewMemoryStore())
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		pg, err := OpenPGStore(ctx, dsn)
+		if err != nil {
+			log.Fatalf("open product_db: %v", err)
+		}
+		store = pg
+	}
+
 	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
-	pb.RegisterProductServiceServer(srv, NewServer())
+	pb.RegisterProductServiceServer(srv, NewServer(store))
 
 	log.Fatal(srv.Serve(lis))
 }
