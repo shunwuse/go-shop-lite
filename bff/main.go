@@ -102,5 +102,13 @@ func main() {
 	http.Handle("/", playground.Handler("GraphQL playground", "/query"))
 	http.Handle("/query", srv)
 
+	rest := &restServer{
+		orders:   pb.NewOrderServiceClient(orders),
+		products: pb.NewProductServiceClient(products),
+	}
+	http.HandleFunc("POST /orders", rest.createOrder)
+	http.HandleFunc("GET /orders/{id}", rest.getOrder)
+	http.HandleFunc("GET /products/{id}", rest.getProduct)
+
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
