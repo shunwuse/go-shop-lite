@@ -33,8 +33,11 @@ func OpenPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 CREATE TABLE IF NOT EXISTS products (
   product_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  stock INT NOT NULL
+  stock INT NOT NULL,
+  category TEXT NOT NULL DEFAULT ''
 );
+-- Evolution: tables created before category existed gain the column here.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS deductions (
   idempotency_key TEXT PRIMARY KEY,
   product_id TEXT NOT NULL,
@@ -54,10 +57,10 @@ CREATE TABLE IF NOT EXISTS restores (
 }
 
 func (s *PGStore) GetProduct(ctx context.Context, productID string) (*pb.GetProductResponse, error) {
-	var name string
+	var name, category string
 	var stock int32
 
-	err := s.db.QueryRowContext(ctx, `SELECT name, stock FROM products WHERE product_id = $1`, productID).Scan(&name, &stock)
+	err := s.db.QueryRowContext(ctx, `SELECT name, stock, category FROM products WHERE product_id = $1`, productID).Scan(&name, &stock, &category)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -65,7 +68,7 @@ func (s *PGStore) GetProduct(ctx context.Context, productID string) (*pb.GetProd
 		return nil, err
 	}
 
-	return &pb.GetProductResponse{ProductId: productID, Name: name, Stock: stock}, nil
+	return &pb.GetProductResponse{ProductId: productID, Name: name, Stock: stock, Category: category}, nil
 }
 
 func (s *PGStore) Deduct(ctx context.Context, productID string, qty int32, key string) (int32, error) {
@@ -148,7 +151,7 @@ func (s *PGStore) Restore(ctx context.Context, productID string, qty int32, key 
 }
 
 func (s *PGStore) Seed(ctx context.Context, productID, name string, stock int32) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO products (product_id, name, stock) VALUES ($1, $2, $3)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO products (product_id, name, stock, category) VALUES ($1, $2, $3, 'fruit')
 ON CONFLICT (product_id) DO UPDATE SET name = EXCLUDED.name, stock = EXCLUDED.stock`,
 		productID, name, stock)
 

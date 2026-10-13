@@ -30,7 +30,7 @@ func main() {
 			log.Fatalf("seed: open product_db: %v", err)
 		}
 		for _, item := range [][3]any{{"p1", "apple", *stock}, {"p2", "banana", *stock}} {
-			if _, err := db.ExecContext(ctx, `INSERT INTO products (product_id, name, stock) VALUES ($1, $2, $3)
+			if _, err := db.ExecContext(ctx, `INSERT INTO products (product_id, name, stock, category) VALUES ($1, $2, $3, 'fruit')
 ON CONFLICT (product_id) DO UPDATE SET name = EXCLUDED.name, stock = EXCLUDED.stock`,
 				item[0], item[1], item[2]); err != nil {
 				log.Fatalf("seed: upsert %v: %v", item[0], err)

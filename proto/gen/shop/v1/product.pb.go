@@ -66,10 +66,13 @@ func (x *GetProductRequest) GetProductId() string {
 }
 
 type GetProductResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProductId     string                 `protobuf:"bytes,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Stock         int32                  `protobuf:"varint,3,opt,name=stock,proto3" json:"stock,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProductId string                 `protobuf:"bytes,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Stock     int32                  `protobuf:"varint,3,opt,name=stock,proto3" json:"stock,omitempty"`
+	// Added after the contract froze: old clients compiled without this
+	// field keep working, they just never see it. Numbers are never reused.
+	Category      string `protobuf:"bytes,4,opt,name=category,proto3" json:"category,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -123,6 +126,13 @@ func (x *GetProductResponse) GetStock() int32 {
 		return x.Stock
 	}
 	return 0
+}
+
+func (x *GetProductResponse) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
 }
 
 type DeductStockRequest struct {
@@ -356,12 +366,13 @@ const file_shop_v1_product_proto_rawDesc = "" +
 	"\x15shop/v1/product.proto\x12\ashop.v1\"2\n" +
 	"\x11GetProductRequest\x12\x1d\n" +
 	"\n" +
-	"product_id\x18\x01 \x01(\tR\tproductId\"]\n" +
+	"product_id\x18\x01 \x01(\tR\tproductId\"y\n" +
 	"\x12GetProductResponse\x12\x1d\n" +
 	"\n" +
 	"product_id\x18\x01 \x01(\tR\tproductId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05stock\x18\x03 \x01(\x05R\x05stock\"n\n" +
+	"\x05stock\x18\x03 \x01(\x05R\x05stock\x12\x1a\n" +
+	"\bcategory\x18\x04 \x01(\tR\bcategory\"n\n" +
 	"\x12DeductStockRequest\x12\x1d\n" +
 	"\n" +
 	"product_id\x18\x01 \x01(\tR\tproductId\x12\x10\n" +

@@ -16,6 +16,9 @@ message GetProductResponse {
   string product_id = 1;
   string name       = 2;
   int32  stock      = 3;
+  // Added after the contract froze: old clients compiled without this
+  // field keep working, they just never see it. Numbers are never reused.
+  string category = 4;
 }
 
 message DeductStockRequest {

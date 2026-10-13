@@ -43,8 +43,8 @@ type MemoryStore struct {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		items: map[string]*pb.GetProductResponse{
-			"p1": {ProductId: "p1", Name: "apple", Stock: 10},
-			"p2": {ProductId: "p2", Name: "banana", Stock: 5},
+			"p1": {ProductId: "p1", Name: "apple", Stock: 10, Category: "fruit"},
+			"p2": {ProductId: "p2", Name: "banana", Stock: 5, Category: "fruit"},
 		},
 		deductions: make(map[string]int32),
 		restores:   make(map[string]int32),
@@ -64,6 +64,7 @@ func (s *MemoryStore) GetProduct(ctx context.Context, productID string) (*pb.Get
 		ProductId: item.GetProductId(),
 		Name:      item.GetName(),
 		Stock:     item.GetStock(),
+		Category:  item.GetCategory(),
 	}, nil
 }
 

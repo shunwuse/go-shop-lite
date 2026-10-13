@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // dial starts an in-memory gRPC server and returns a client for it.
@@ -189,5 +191,37 @@ func TestRestoreStock_NotFound(t *testing.T) {
 
 	if _, err := c.RestoreStock(context.Background(), &pb.RestoreStockRequest{ProductId: "nope", Qty: 1, IdempotencyKey: "k-missing"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("RestoreStock unknown code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestGetProduct_Evolution(t *testing.T) {
+	c := dial(t)
+
+	resp, err := c.GetProduct(context.Background(), &pb.GetProductRequest{ProductId: "p1"})
+	if err != nil {
+		t.Fatalf("GetProduct: %v", err)
+	}
+	// New clients see the added field.
+	if resp.GetCategory() != "fruit" {
+		t.Fatalf("category = %q, want fruit", resp.GetCategory())
+	}
+	// Old clients (compiled before field 4 existed) never see it, and
+	// the wire does not break them: the old fields arrive intact through
+	// a shape that lacks the new one. Field numbers frozen is what makes
+	// this true; renumbering would silently corrupt instead.
+	raw, err := protojson.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var old struct {
+		ProductID string `json:"productId"`
+		Name      string `json:"name"`
+		Stock     int32  `json:"stock"`
+	}
+	if err := json.Unmarshal(raw, &old); err != nil {
+		t.Fatalf("old client decode: %v", err)
+	}
+	if old.ProductID != "p1" || old.Name != "apple" || old.Stock != 10 {
+		t.Fatalf("old client saw %+v, want p1/apple/10", old)
 	}
 }
