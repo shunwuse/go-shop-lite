@@ -120,6 +120,13 @@ ghz --insecure --proto proto/shop/v1/product.proto \
 | CreateOrder (happy) | 502 | 68ms | 487ms | Postgres-backed, seeded 10000, 5000/5000 OK. In-memory failure-dominated run did 17.4k RPS (10 OK + 4990 FailedPrecondition); its percentiles were withheld over a ghz reporting anomaly |
 | GetProduct  | 29.5k | 0.89ms  | 3.65ms  | pure reads, 5000/5000 OK |
 
+## Chaos (kill product 5s mid-load, 2000 orders at c=20)
+
+1133 OK + 867 Unavailable, all reconciled: p1 stock 8867 (= 10000 − 1133,
+deducted exactly once each), 867 CANCELLED (= failures, all compensated),
+CREATED 6133 (= 5000 earlier + 1133). No lost orders, no double deducts.
+Retries cover blips; a 5s outage fails clean and compensates.
+
 ## Development
 
 ```bash
