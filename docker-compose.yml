@@ -7,6 +7,10 @@ services:
     environment:
       OTEL_ADDR: jaeger:4317
       DATABASE_URL: postgres://product_user:product_pw@postgres:5432/product_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
   order:
     build:
       context: .
@@ -17,12 +21,20 @@ services:
       NATS_ADDR: nats:4222
       OTEL_ADDR: jaeger:4317
       DATABASE_URL: postgres://order_user:order_pw@postgres:5432/order_db?sslmode=disable
-    depends_on: [product]
+    depends_on:
+      product:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: on-failure
   user:
     build:
       context: .
       dockerfile: ./services/user/Dockerfile
     ports: ["50053:50053"]
+    restart: on-failure
   bff:
     build:
       context: .
@@ -33,13 +45,25 @@ services:
       PRODUCT_ADDR: product:50052
       USER_ADDR: user:50053
       OTEL_ADDR: jaeger:4317
-    depends_on: [order, product, user]
+    depends_on:
+      order:
+        condition: service_started
+      product:
+        condition: service_started
+      user:
+        condition: service_started
+    restart: on-failure
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_PASSWORD: shop
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data, ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
   nats:
     image: nats:latest
     command: ["-js"]
@@ -52,6 +76,7 @@ services:
     environment:
       NATS_ADDR: nats:4222
     depends_on: [nats, order]
+    restart: on-failure
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports: ["16686:16686", "4317:4317", "4318:4318"]
