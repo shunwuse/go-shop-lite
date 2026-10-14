@@ -16,7 +16,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	shutdown, err := tracing.Init(ctx, os.Getenv("OTEL_ADDR"))
+	shutdown, err := tracing.Init(ctx, os.Getenv("OTEL_ADDR"), "order")
 	if err != nil {
 		log.Fatalf("tracing: %v", err)
 	}
