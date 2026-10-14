@@ -106,9 +106,9 @@ func main() {
 		orders:   pb.NewOrderServiceClient(orders),
 		products: pb.NewProductServiceClient(products),
 	}
-	http.HandleFunc("POST /orders", rest.createOrder)
-	http.HandleFunc("GET /orders/{id}", rest.getOrder)
-	http.HandleFunc("GET /products/{id}", rest.getProduct)
+	http.Handle("POST /orders", withTracing(http.HandlerFunc(rest.createOrder)))
+	http.Handle("GET /orders/{id}", withTracing(http.HandlerFunc(rest.getOrder)))
+	http.Handle("GET /products/{id}", withTracing(http.HandlerFunc(rest.getProduct)))
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

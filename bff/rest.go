@@ -5,10 +5,28 @@ import (
 	"net/http"
 
 	pb "example.com/shop/proto/gen/shop/v1"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// withTracing opens the bff-side span around a REST route, so REST-built
+// traces have the same head as GraphQL ones. The span name is the matched
+// route pattern, not the raw path: IDs stay out of span names.
+func withTracing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.Pattern
+		if name == "" {
+			name = r.Method + " " + r.URL.Path
+		}
+
+		ctx, span := otel.Tracer("example.com/shop/bff").Start(r.Context(), name)
+		defer span.End()
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // restServer speaks resource-style REST over the same gRPC clients the
 // GraphQL resolvers use. One endpoint returns one resource on purpose:
